@@ -18,7 +18,7 @@ const labelsLayer = document.getElementById("labelsLayer");
 const tasks = [
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
-Click on the point in the photo to add an annotation. 
+Click on the point in the photo to add an annotation. Press Enter to apply the label 
 
 Make sure the audio is being recorded and can be heard.
 
@@ -29,7 +29,7 @@ Time limit: 90 seconds
 Upload the screen recording to the Google Forms form and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
-Click on the point in the photo to add an annotation. 
+Click on the point in the photo to add an annotation. Press Enter to apply the label 
 
 Make sure the audio is being recorded and can be heard.
 
@@ -40,7 +40,7 @@ Time limit: 90 seconds
 Upload the screen recording to the Google Forms and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
-Click on the point in the photo to add an annotation. 
+Click on the point in the photo to add an annotation. Press Enter to apply the label 
 
 Make sure the audio is being recorded and can be heard.
 
@@ -51,7 +51,7 @@ Time limit: 60 seconds
 Upload the screen recording to the Google Forms and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
-Click on the point in the photo to add an annotation. 
+Click on the point in the photo to add an annotation. Press Enter to apply the label 
 
 Make sure the audio is being recorded and can be heard.
 
@@ -88,6 +88,7 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let recordingDownloadUrl = null;
 let recordingFileName = "";
+let currentLabelInput = null;
 
 function loadImage(src) {
 	return new Promise((resolve, reject) => {
@@ -205,6 +206,7 @@ function renderLabels() {
 
 function setSelectedImage(index) {
 	if (selectedImageId) {
+		applyCurrentLabel();
 		saveTrailForSelectedImage();
 	}
 
@@ -259,6 +261,7 @@ function startCurrentImageWindow() {
 }
 
 function advanceToNextImage() {
+	applyCurrentLabel();
 	saveTrailForSelectedImage();
 	annotationsEnabled = false;
 	nextImageBtn.classList.add("is-hidden");
@@ -385,6 +388,8 @@ function showLabelInput(event) {
 		return;
 	}
 
+	applyCurrentLabel();
+
 	const rect = frame.getBoundingClientRect();
 	const clickX = event.clientX - rect.left;
 	const clickY = event.clientY - rect.top;
@@ -416,6 +421,8 @@ function showLabelInput(event) {
 	frame.appendChild(input);
 	input.focus();
 
+	currentLabelInput = { input, relativeX, relativeY };
+
 	const handleSubmit = () => {
 		const text = input.value.trim() || `Label ${(labelsByImage.get(selectedImageId) || []).length + 1}`;
 		const labels = labelsByImage.get(selectedImageId) || [];
@@ -423,6 +430,7 @@ function showLabelInput(event) {
 		labelsByImage.set(selectedImageId, labels);
 		renderLabels();
 		input.remove();
+		currentLabelInput = null;
 	};
 
 	input.addEventListener("keydown", (e) => {
@@ -435,9 +443,30 @@ function showLabelInput(event) {
 		setTimeout(() => {
 			if (input.parentNode === frame) {
 				input.remove();
+				if (currentLabelInput?.input === input) {
+					currentLabelInput = null;
+				}
 			}
 		}, 100);
 	});
+}
+
+function applyCurrentLabel() {
+	if (!currentLabelInput) {
+		return;
+	}
+
+	const { input, relativeX, relativeY } = currentLabelInput;
+	const text = input.value.trim() || `Label ${(labelsByImage.get(selectedImageId) || []).length + 1}`;
+	const labels = labelsByImage.get(selectedImageId) || [];
+	labels.push({ text, x: relativeX, y: relativeY });
+	labelsByImage.set(selectedImageId, labels);
+	renderLabels();
+
+	if (input.parentNode === frame) {
+		input.remove();
+	}
+	currentLabelInput = null;
 }
 
 function addLabelAtClick(event) {
