@@ -3,6 +3,8 @@ const trailColor = document.getElementById("trailColor");
 const clearTrailBtn = document.getElementById("clearTrailBtn");
 const startRecordingBtn = document.getElementById("startRecordingBtn");
 const endRecordingBtn = document.getElementById("endRecordingBtn");
+const downloadAllBtn = document.getElementById("downloadAllBtn");
+const pauseBtn = document.getElementById("pauseBtn");
 const timer = document.getElementById("timer");
 const imageProgress = document.getElementById("imageProgress");
 const statusText = document.getElementById("statusText");
@@ -26,12 +28,25 @@ let selectedImageId = null;
 let currentImageIndex = 0;
 let remainingSeconds = 30;
 let annotationTimerInterval = null;
-let annotationsEnabled = true;
+let annotationsEnabled = false;
 let lastPoint = null;
+let sequenceActive = false;
+let isPaused = false;
 
 let displayStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
+let recordingDownloadUrl = null;
+let recordingFileName = "";
+
+function loadImage(src) {
+	return new Promise((resolve, reject) => {
+		const image = new Image();
+		image.onload = () => resolve(image);
+		image.onerror = () => reject(new Error(`Unable to load image: ${src}`));
+		image.src = src;
+	});
+}
 
 function setStatus(message) {
 	statusText.textContent = message;
@@ -47,6 +62,11 @@ function updateTimerUI() {
 	timer.textContent = formatSeconds(remainingSeconds);
 }
 
+function updatePauseButtonUI() {
+	pauseBtn.textContent = isPaused ? "Resume" : "Pause";
+	pauseBtn.disabled = !sequenceActive;
+}
+
 function stopAnnotationTimer() {
 	clearInterval(annotationTimerInterval);
 	annotationTimerInterval = null;
@@ -58,11 +78,15 @@ function startAnnotationTimer() {
 	updateTimerUI();
 
 	annotationTimerInterval = setInterval(() => {
+		if (isPaused) {
+			return;
+		}
+
 		remainingSeconds -= 1;
 		updateTimerUI();
 
 		if (remainingSeconds <= 0) {
-			goToNextImage();
+			advanceToNextImage();
 		}
 	}, 1000);
 }
@@ -125,7 +149,6 @@ function setSelectedImage(index) {
 	currentImageIndex = index;
 	const selected = images[currentImageIndex];
 	selectedImageId = selected.id;
-	annotationsEnabled = true;
 
 	activeImage.src = selected.url;
 	activeImage.alt = selected.name;
@@ -136,48 +159,218 @@ function setSelectedImage(index) {
 		restoreTrailForSelectedImage();
 		renderLabels();
 	});
-
-	setStatus(`Annotating ${selected.name}. You have 30 seconds.`);
-	startAnnotationTimer();
 }
 
 function completeSequence() {
 	annotationsEnabled = false;
+	sequenceActive = false;
+	isPaused = false;
+	updatePauseButtonUI();
 	stopAnnotationTimer();
 	remainingSeconds = 0;
 	updateTimerUI();
-	setStatus("Annotation completed for all photos.");
+	setStatus("Annotation completed for all photos. Stopping recording...");
+
+	if (mediaRecorder && mediaRecorder.state === "recording") {
+		mediaRecorder.stop();
+	}
 }
 
-function goToNextImage() {
+function startCurrentImageWindow() {
+	if (!sequenceActive) {
+		return;
+	}
+
+	annotationsEnabled = true;
+	isPaused = false;
+	updatePauseButtonUI();
+	const selected = images[currentImageIndex];
+	setStatus(`Annotating ${selected.name}. You have 30 seconds.`);
+	startAnnotationTimer();
+}
+
+function advanceToNextImage() {
 	saveTrailForSelectedImage();
+	annotationsEnabled = false;
 
 	if (currentImageIndex < images.length - 1) {
 		setSelectedImage(currentImageIndex + 1);
+		startCurrentImageWindow();
 		return;
 	}
 
 	completeSequence();
 }
 
-function addLabelAtClick(event) {
+function clearAllAnnotations() {
+	labelsByImage.clear();
+	trailByImage.clear();
+	labelsLayer.innerHTML = "";
+	clearCanvas();
+}
+
+function triggerBlobDownload(blob, fileName) {
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = fileName;
+	link.click();
+
+	setTimeout(() => {
+		URL.revokeObjectURL(url);
+	}, 1500);
+}
+
+async function buildAnnotatedPhotoBlob(imageEntry) {
+	const baseImage = await loadImage(imageEntry.url);
+	const outputCanvas = document.createElement("canvas");
+	outputCanvas.width = baseImage.naturalWidth;
+	outputCanvas.height = baseImage.naturalHeight;
+
+	const outputCtx = outputCanvas.getContext("2d");
+	outputCtx.drawImage(baseImage, 0, 0, outputCanvas.width, outputCanvas.height);
+
+	const trailDataUrl = trailByImage.get(imageEntry.id);
+	if (trailDataUrl) {
+		const trailImage = await loadImage(trailDataUrl);
+		outputCtx.drawImage(trailImage, 0, 0, outputCanvas.width, outputCanvas.height);
+	}
+
+	const labels = labelsByImage.get(imageEntry.id) || [];
+	labels.forEach((label) => {
+		const centerX = label.x * outputCanvas.width;
+		const centerY = label.y * outputCanvas.height;
+
+		const fontSize = Math.max(16, Math.round(outputCanvas.width * 0.02));
+		const xPadding = Math.max(8, Math.round(fontSize * 0.45));
+		const yPadding = Math.max(6, Math.round(fontSize * 0.32));
+
+		outputCtx.font = `600 ${fontSize}px Space Grotesk, Segoe UI, sans-serif`;
+		const textWidth = outputCtx.measureText(label.text).width;
+		const chipWidth = textWidth + xPadding * 2;
+		const chipHeight = fontSize + yPadding * 2;
+		const chipX = centerX - chipWidth / 2;
+		const chipY = centerY - chipHeight / 2;
+
+		outputCtx.fillStyle = "rgba(0, 0, 0, 0.72)";
+		outputCtx.beginPath();
+		outputCtx.roundRect(chipX, chipY, chipWidth, chipHeight, Math.round(chipHeight / 2));
+		outputCtx.fill();
+
+		outputCtx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+		outputCtx.lineWidth = Math.max(1, Math.round(outputCanvas.width * 0.0015));
+		outputCtx.stroke();
+
+		outputCtx.fillStyle = "#ffffff";
+		outputCtx.textAlign = "left";
+		outputCtx.textBaseline = "middle";
+		outputCtx.fillText(label.text, chipX + xPadding, centerY);
+	});
+
+	return new Promise((resolve, reject) => {
+		outputCanvas.toBlob((blob) => {
+			if (!blob) {
+				reject(new Error("Unable to generate photo blob."));
+				return;
+			}
+
+			resolve(blob);
+		}, "image/png");
+	});
+}
+
+async function downloadAllFiles() {
+	if (!recordingDownloadUrl) {
+		setStatus("No recording available to download.");
+		return;
+	}
+
+	try {
+		setStatus("Downloading recording and images...");
+
+		const recordingBlob = await fetch(recordingDownloadUrl).then((res) => res.blob());
+		triggerBlobDownload(recordingBlob, recordingFileName || "session-recording.webm");
+
+	for (let i = 0; i < images.length; i++) {
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		try {
+			const imageEntry = images[i];
+			const photoBlob = await buildAnnotatedPhotoBlob(imageEntry);
+			const baseName = imageEntry.name.replace(/\.[^.]+$/, "");
+			triggerBlobDownload(photoBlob, `${baseName}-annotated.png`);
+		} catch (error) {
+			setStatus(`Unable to export photo ${i + 1}: ${error.message}`);
+		}
+	}
+
+		setStatus("Download complete. Recording and all annotated photos saved.");
+	} catch (error) {
+		setStatus(`Download error: ${error.message}`);
+	}
+}
+
+function showLabelInput(event) {
 	if (!annotationsEnabled || !selectedImageId) {
 		return;
 	}
 
 	const rect = frame.getBoundingClientRect();
-	const x = (event.clientX - rect.left) / rect.width;
-	const y = (event.clientY - rect.top) / rect.height;
+	const clickX = event.clientX - rect.left;
+	const clickY = event.clientY - rect.top;
+	const relativeX = clickX / rect.width;
+	const relativeY = clickY / rect.height;
 
-	if (x < 0 || x > 1 || y < 0 || y > 1) {
+	if (relativeX < 0 || relativeX > 1 || relativeY < 0 || relativeY > 1) {
 		return;
 	}
 
-	const labels = labelsByImage.get(selectedImageId) || [];
-	const text = labelText.value.trim() || `Label ${labels.length + 1}`;
-	labels.push({ text, x, y });
-	labelsByImage.set(selectedImageId, labels);
-	renderLabels();
+	const input = document.createElement("input");
+	input.type = "text";
+	input.placeholder = "Label text...";
+	input.style.position = "absolute";
+	input.style.left = `${clickX}px`;
+	input.style.top = `${clickY}px`;
+	input.style.transform = "translate(-50%, -50%)";
+	input.style.padding = "6px 8px";
+	input.style.borderRadius = "6px";
+	input.style.border = "1px solid #ff5a3d";
+	input.style.backgroundColor = "#f7fbff";
+	input.style.color = "#09203f";
+	input.style.fontSize = "13px";
+	input.style.fontWeight = "600";
+	input.style.zIndex = "10";
+	input.style.minWidth = "120px";
+	input.style.outline = "none";
+
+	frame.appendChild(input);
+	input.focus();
+
+	const handleSubmit = () => {
+		const text = input.value.trim() || `Label ${(labelsByImage.get(selectedImageId) || []).length + 1}`;
+		const labels = labelsByImage.get(selectedImageId) || [];
+		labels.push({ text, x: relativeX, y: relativeY });
+		labelsByImage.set(selectedImageId, labels);
+		renderLabels();
+		input.remove();
+	};
+
+	input.addEventListener("keydown", (e) => {
+		if (e.key === "Enter") {
+			handleSubmit();
+		}
+	});
+
+	input.addEventListener("blur", () => {
+		setTimeout(() => {
+			if (input.parentNode === frame) {
+				input.remove();
+			}
+		}, 100);
+	});
+}
+
+function addLabelAtClick(event) {
+	showLabelInput(event);
 }
 
 function drawTrail(event) {
@@ -238,24 +431,24 @@ function stopDisplayTracks() {
 function finishRecording() {
 	if (recordedChunks.length === 0) {
 		setStatus("Recording stopped, but no data was captured.");
+		downloadAllBtn.classList.add("is-hidden");
+		downloadAllBtn.disabled = true;
 		return;
 	}
 
 	const mimeType = mediaRecorder ? mediaRecorder.mimeType : "video/webm";
 	const blob = new Blob(recordedChunks, { type: mimeType });
-	const url = URL.createObjectURL(blob);
-	const fileName = `session-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
 
-	const downloadLink = document.createElement("a");
-	downloadLink.href = url;
-	downloadLink.download = fileName;
-	downloadLink.click();
+	if (recordingDownloadUrl) {
+		URL.revokeObjectURL(recordingDownloadUrl);
+	}
 
-	setTimeout(() => {
-		URL.revokeObjectURL(url);
-	}, 2000);
+	recordingDownloadUrl = URL.createObjectURL(blob);
+	recordingFileName = `session-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
 
-	setStatus(`Recording saved as ${fileName}.`);
+	downloadAllBtn.classList.remove("is-hidden");
+	downloadAllBtn.disabled = false;
+	setStatus("Recording completed. Click 'download recording and images'.");
 }
 
 async function startRecording() {
@@ -268,6 +461,15 @@ async function startRecording() {
 			video: { frameRate: 30 },
 			audio: true
 		});
+
+		if (recordingDownloadUrl) {
+			URL.revokeObjectURL(recordingDownloadUrl);
+			recordingDownloadUrl = null;
+			recordingFileName = "";
+		}
+
+		downloadAllBtn.classList.add("is-hidden");
+		downloadAllBtn.disabled = true;
 
 		const hasAudio = displayStream.getAudioTracks().length > 0;
 		if (!hasAudio) {
@@ -288,6 +490,11 @@ async function startRecording() {
 
 		mediaRecorder.addEventListener("stop", () => {
 			stopDisplayTracks();
+			stopAnnotationTimer();
+			annotationsEnabled = false;
+			sequenceActive = false;
+			isPaused = false;
+			updatePauseButtonUI();
 			finishRecording();
 
 			startRecordingBtn.disabled = false;
@@ -299,6 +506,14 @@ async function startRecording() {
 				mediaRecorder.stop();
 			}
 		});
+
+		clearAllAnnotations();
+		currentImageIndex = 0;
+		setSelectedImage(currentImageIndex);
+		sequenceActive = true;
+		isPaused = false;
+		updatePauseButtonUI();
+		startCurrentImageWindow();
 
 		mediaRecorder.start(200);
 		startRecordingBtn.disabled = true;
@@ -314,7 +529,31 @@ function endRecording() {
 		return;
 	}
 
+	sequenceActive = false;
+	annotationsEnabled = false;
+	isPaused = false;
+	updatePauseButtonUI();
+	stopAnnotationTimer();
 	mediaRecorder.stop();
+}
+
+function togglePause() {
+	if (!sequenceActive) {
+		return;
+	}
+
+	isPaused = !isPaused;
+	updatePauseButtonUI();
+
+	if (isPaused) {
+		annotationsEnabled = false;
+		lastPoint = null;
+		setStatus("Timer paused. Annotations are disabled.");
+		return;
+	}
+
+	annotationsEnabled = true;
+	setStatus(`Annotating ${images[currentImageIndex].name}. You have ${remainingSeconds} seconds.`);
 }
 
 frame.addEventListener("click", addLabelAtClick);
@@ -336,6 +575,8 @@ clearTrailBtn.addEventListener("click", () => {
 
 startRecordingBtn.addEventListener("click", startRecording);
 endRecordingBtn.addEventListener("click", endRecording);
+pauseBtn.addEventListener("click", togglePause);
+downloadAllBtn.addEventListener("click", downloadAllFiles);
 
 window.addEventListener("resize", () => {
 	if (!selectedImageId) {
@@ -350,10 +591,14 @@ window.addEventListener("resize", () => {
 
 if (images.length > 0) {
 	setSelectedImage(0);
+	setStatus("Press Start Recording to begin the 30-second timer for each photo.");
+	updateTimerUI();
+	updatePauseButtonUI();
 } else {
 	setStatus("No images found in the folder.");
 	annotationsEnabled = false;
 	stopAnnotationTimer();
 	remainingSeconds = 0;
 	updateTimerUI();
+	updatePauseButtonUI();
 }

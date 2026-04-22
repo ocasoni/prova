@@ -118,6 +118,15 @@ h1 {
 	color: var(--accent);
 }
 
+.pause-btn {
+	margin-top: 8px;
+	padding: 7px 10px;
+	font-size: 0.88rem;
+	background: rgba(255, 255, 255, 0.18);
+	color: var(--text-main);
+	border-color: var(--panel-border);
+}
+
 .toolbar {
 	margin-top: 18px;
 	display: flex;
@@ -187,6 +196,21 @@ input[type="color"] {
 	border-color: var(--panel-border);
 }
 
+#labelText {
+	display: none;
+}
+
+.color-wrap {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 10px;
+	border: 1px solid var(--panel-border);
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.08);
+	font-size: 0.93rem;
+}
+
 .record-start {
 	background: linear-gradient(135deg, #4de48e, #1fae62);
 	color: #042414;
@@ -200,6 +224,11 @@ input[type="color"] {
 .download-btn {
 	background: linear-gradient(135deg, #7cd8ff, #52a8ff);
 	color: #02213f;
+}
+
+.download-all-btn {
+	background: linear-gradient(135deg, #b87cff, #8a52ff);
+	color: #320259;
 }
 
 .is-hidden {
