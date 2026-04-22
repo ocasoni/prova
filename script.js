@@ -4,7 +4,9 @@ const clearTrailBtn = document.getElementById("clearTrailBtn");
 const startRecordingBtn = document.getElementById("startRecordingBtn");
 const endRecordingBtn = document.getElementById("endRecordingBtn");
 const downloadAllBtn = document.getElementById("downloadAllBtn");
+const nextImageBtn = document.getElementById("nextImageBtn");
 const pauseBtn = document.getElementById("pauseBtn");
+const taskContainer = document.getElementById("taskContainer");
 const timer = document.getElementById("timer");
 const imageProgress = document.getElementById("imageProgress");
 const statusText = document.getElementById("statusText");
@@ -12,6 +14,53 @@ const frame = document.getElementById("frame");
 const activeImage = document.getElementById("activeImage");
 const trailCanvas = document.getElementById("trailCanvas");
 const labelsLayer = document.getElementById("labelsLayer");
+
+const tasks = [
+	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
+
+Click on the point in the photo to add an annotation. 
+
+Make sure the audio is being recorded and can be heard.
+
+Task: annotate the three images objectively. As you annotate them, describe the photo aloud and explain how you have decided to annotate those elements. 
+
+Time limit: 90 seconds
+
+Upload the screen recording to the Google Forms form and answer the other two questions`,
+	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
+
+Click on the point in the photo to add an annotation. 
+
+Make sure the audio is being recorded and can be heard.
+
+Task: annotate the three images objectively. As you annotate them, describe your interpretation of the photo out loud. 
+
+Time limit: 90 seconds
+
+Upload the screen recording to the Google Forms and answer the other two questions`,
+	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
+
+Click on the point in the photo to add an annotation. 
+
+Make sure the audio is being recorded and can be heard.
+
+Task: annotate the three images objectively. As you annotate them, describe your interpretation of the photo out loud. 
+
+Time limit: 60 seconds
+
+Upload the screen recording to the Google Forms and answer the other two questions`,
+	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
+
+Click on the point in the photo to add an annotation. 
+
+Make sure the audio is being recorded and can be heard.
+
+Task: annotate these images giving a verbal interpretation of the emotions that shine through people's faces.
+
+Time limit: none
+
+Upload the screen recording to the Google Forms and answer the other two questions`
+];
 
 const trailCtx = trailCanvas.getContext("2d");
 
@@ -26,6 +75,7 @@ const trailByImage = new Map();
 
 let selectedImageId = null;
 let currentImageIndex = 0;
+let currentTaskIndex = -1;
 let remainingSeconds = 30;
 let annotationTimerInterval = null;
 let annotationsEnabled = false;
@@ -74,8 +124,20 @@ function stopAnnotationTimer() {
 
 function startAnnotationTimer() {
 	stopAnnotationTimer();
-	remainingSeconds = 30;
+
+	if (currentTaskIndex === 3) {
+		remainingSeconds = 0;
+		updateTimerUI();
+		nextImageBtn.classList.remove("is-hidden");
+		nextImageBtn.disabled = false;
+		return;
+	}
+
+	const timerDuration = (currentTaskIndex === 2) ? 20 : 30;
+	remainingSeconds = timerDuration;
 	updateTimerUI();
+	nextImageBtn.classList.add("is-hidden");
+	nextImageBtn.disabled = true;
 
 	annotationTimerInterval = setInterval(() => {
 		if (isPaused) {
@@ -185,13 +247,22 @@ function startCurrentImageWindow() {
 	isPaused = false;
 	updatePauseButtonUI();
 	const selected = images[currentImageIndex];
-	setStatus(`Annotating ${selected.name}. You have 30 seconds.`);
+
+	if (currentTaskIndex === 3) {
+		setStatus(`Annotating ${selected.name}. Click 'Next Image' when done.`);
+	} else {
+		const timerDuration = (currentTaskIndex === 2) ? 20 : 30;
+		setStatus(`Annotating ${selected.name}. You have ${timerDuration} seconds.`);
+	}
+
 	startAnnotationTimer();
 }
 
 function advanceToNextImage() {
 	saveTrailForSelectedImage();
 	annotationsEnabled = false;
+	nextImageBtn.classList.add("is-hidden");
+	nextImageBtn.disabled = true;
 
 	if (currentImageIndex < images.length - 1) {
 		setSelectedImage(currentImageIndex + 1);
@@ -470,6 +541,8 @@ async function startRecording() {
 
 		downloadAllBtn.classList.add("is-hidden");
 		downloadAllBtn.disabled = true;
+		nextImageBtn.classList.add("is-hidden");
+		nextImageBtn.disabled = true;
 
 		const hasAudio = displayStream.getAudioTracks().length > 0;
 		if (!hasAudio) {
@@ -495,6 +568,8 @@ async function startRecording() {
 			sequenceActive = false;
 			isPaused = false;
 			updatePauseButtonUI();
+			nextImageBtn.classList.add("is-hidden");
+			nextImageBtn.disabled = true;
 			finishRecording();
 
 			startRecordingBtn.disabled = false;
@@ -576,6 +651,7 @@ clearTrailBtn.addEventListener("click", () => {
 startRecordingBtn.addEventListener("click", startRecording);
 endRecordingBtn.addEventListener("click", endRecording);
 pauseBtn.addEventListener("click", togglePause);
+nextImageBtn.addEventListener("click", advanceToNextImage);
 downloadAllBtn.addEventListener("click", downloadAllFiles);
 
 window.addEventListener("resize", () => {
@@ -589,11 +665,17 @@ window.addEventListener("resize", () => {
 	renderLabels();
 });
 
+function displayRandomTask() {
+	currentTaskIndex = Math.floor(Math.random() * tasks.length);
+	taskContainer.textContent = tasks[currentTaskIndex];
+}
+
 if (images.length > 0) {
 	setSelectedImage(0);
 	setStatus("Press Start Recording to begin the 30-second timer for each photo.");
 	updateTimerUI();
 	updatePauseButtonUI();
+	displayRandomTask();
 } else {
 	setStatus("No images found in the folder.");
 	annotationsEnabled = false;
@@ -601,4 +683,5 @@ if (images.length > 0) {
 	remainingSeconds = 0;
 	updateTimerUI();
 	updatePauseButtonUI();
+	displayRandomTask();
 }
