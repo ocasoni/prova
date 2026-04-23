@@ -10,6 +10,8 @@ const taskContainer = document.getElementById("taskContainer");
 const timer = document.getElementById("timer");
 const imageProgress = document.getElementById("imageProgress");
 const statusText = document.getElementById("statusText");
+const transcriptStatus = document.getElementById("transcriptStatus");
+const transcriptText = document.getElementById("transcriptText");
 const frame = document.getElementById("frame");
 const activeImage = document.getElementById("activeImage");
 const trailCanvas = document.getElementById("trailCanvas");
@@ -26,7 +28,7 @@ Task: annotate the three images objectively. As you annotate them, describe the 
 
 Time limit: 90 seconds
 
-Upload the screen recording to the Google Forms form and answer the other two questions`,
+Upload the screen recording and the transcript to the Google Forms and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
 Click on the point in the photo to add an annotation. Press Enter to apply the label 
@@ -37,7 +39,7 @@ Task: annotate the three images objectively. As you annotate them, describe your
 
 Time limit: 90 seconds
 
-Upload the screen recording to the Google Forms and answer the other two questions`,
+Upload the screen recording and the transcript to the Google Forms and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
 Click on the point in the photo to add an annotation. Press Enter to apply the label 
@@ -48,7 +50,7 @@ Task: annotate the three images objectively. As you annotate them, describe your
 
 Time limit: 60 seconds
 
-Upload the screen recording to the Google Forms and answer the other two questions`,
+Upload the screen recording and the transcript to the Google Forms and answer the other two questions`,
 	`Click 'Start Recording' to begin recording your screen and audio, and to start the timer and annotations. 
 
 Click on the point in the photo to add an annotation. Press Enter to apply the label 
@@ -59,7 +61,7 @@ Task: annotate these images giving a verbal interpretation of the emotions that 
 
 Time limit: none
 
-Upload the screen recording to the Google Forms and answer the other two questions`
+Upload the screen recording and the transcript to the Google Forms and answer the other two questions`
 ];
 
 const trailCtx = trailCanvas.getContext("2d");
@@ -92,6 +94,108 @@ let recordedChunks = [];
 let recordingDownloadUrl = null;
 let recordingFileName = "";
 let currentLabelInput = null;
+let speechRecognition = null;
+let speechRecognitionActive = false;
+let transcriptFinalText = "";
+let transcriptInterimText = "";
+
+function getSpeechRecognitionConstructor() {
+	return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function updateTranscriptPanel() {
+	const transcript = `${transcriptFinalText}${transcriptInterimText}`.trim();
+	transcriptText.textContent = transcript || "The transcript will appear here after the recording starts.";
+}
+
+function getFinalTranscriptText() {
+	const transcript = `${transcriptFinalText}${transcriptInterimText}`.trim();
+	if (transcript) {
+		return transcript;
+	}
+
+	if (transcriptStatus.textContent === "Transcript unavailable in this browser.") {
+		return "Transcript unavailable in this browser.";
+	}
+
+	return "No speech was transcribed during the recording.";
+}
+
+function startSpeechTranscription() {
+	const SpeechRecognition = getSpeechRecognitionConstructor();
+	if (!SpeechRecognition) {
+		transcriptStatus.textContent = "Transcript unavailable in this browser.";
+		transcriptText.textContent = "This browser does not support live speech transcription.";
+		return;
+	}
+
+	transcriptFinalText = "";
+	transcriptInterimText = "";
+	updateTranscriptPanel();
+	transcriptStatus.textContent = "Listening to the microphone for transcription...";
+
+	if (!speechRecognition) {
+		speechRecognition = new SpeechRecognition();
+		speechRecognition.continuous = true;
+		speechRecognition.interimResults = true;
+		speechRecognition.lang = navigator.language || "it-IT";
+
+		speechRecognition.onresult = (event) => {
+			let interimText = "";
+
+			for (let index = event.resultIndex; index < event.results.length; index += 1) {
+				const result = event.results[index];
+				const text = result[0].transcript;
+
+				if (result.isFinal) {
+					transcriptFinalText += `${text} `;
+				} else {
+					interimText += `${text} `;
+				}
+			}
+
+			transcriptInterimText = interimText;
+			updateTranscriptPanel();
+		};
+
+		speechRecognition.onerror = (event) => {
+			transcriptStatus.textContent = `Transcription error: ${event.error}`;
+		};
+
+		speechRecognition.onend = () => {
+			if (speechRecognitionActive && mediaRecorder && mediaRecorder.state === "recording") {
+				setTimeout(() => {
+					try {
+						speechRecognition.start();
+					} catch (error) {
+						transcriptStatus.textContent = `Transcription restart failed: ${error.message}`;
+					}
+				}, 200);
+			}
+		};
+	}
+
+	speechRecognitionActive = true;
+	try {
+		speechRecognition.start();
+	} catch (error) {
+		transcriptStatus.textContent = `Unable to start transcription: ${error.message}`;
+	}
+}
+
+function stopSpeechTranscription() {
+	speechRecognitionActive = false;
+	transcriptInterimText = "";
+	updateTranscriptPanel();
+
+	if (speechRecognition) {
+		try {
+			speechRecognition.stop();
+		} catch (error) {
+			// Ignore stop failures when the recognition session is already closed.
+		}
+	}
+}
 
 function loadImage(src) {
 	return new Promise((resolve, reject) => {
@@ -368,6 +472,9 @@ async function downloadAllFiles() {
 		const recordingBlob = await fetch(recordingDownloadUrl).then((res) => res.blob());
 		triggerBlobDownload(recordingBlob, recordingFileName || "session-recording.webm");
 
+		const transcriptBlob = new Blob([getFinalTranscriptText()], { type: "text/plain;charset=utf-8" });
+		triggerBlobDownload(transcriptBlob, `${(recordingFileName || "session-recording.webm").replace(/\.webm$/i, "")}-transcript.txt`);
+
 	for (let i = 0; i < images.length; i++) {
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		try {
@@ -523,6 +630,8 @@ function pickSupportedMimeType() {
 }
 
 function stopDisplayTracks() {
+	stopSpeechTranscription();
+
 	if (recordingAudioContext) {
 		recordingAudioContext.close();
 		recordingAudioContext = null;
@@ -629,6 +738,7 @@ async function startRecording() {
 		]);
 
 		mediaRecorder = new MediaRecorder(recordingStream, { mimeType });
+		startSpeechTranscription();
 
 		mediaRecorder.addEventListener("dataavailable", (event) => {
 			if (event.data && event.data.size > 0) {
@@ -646,6 +756,10 @@ async function startRecording() {
 			nextImageBtn.classList.add("is-hidden");
 			nextImageBtn.disabled = true;
 			finishRecording();
+			transcriptStatus.textContent = transcriptFinalText.trim()
+				? "Transcript ready below."
+				: "No speech was transcribed during the recording.";
+			updateTranscriptPanel();
 
 			startRecordingBtn.disabled = false;
 			endRecordingBtn.disabled = true;
@@ -671,6 +785,7 @@ async function startRecording() {
 	} catch (error) {
 		setStatus(`Unable to start recording: ${error.message}`);
 		stopDisplayTracks();
+		stopSpeechTranscription();
 	}
 }
 
