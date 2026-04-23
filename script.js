@@ -84,6 +84,9 @@ let sequenceActive = false;
 let isPaused = false;
 
 let displayStream = null;
+let microphoneStream = null;
+let recordingAudioContext = null;
+let recordingAudioDestination = null;
 let mediaRecorder = null;
 let recordedChunks = [];
 let recordingDownloadUrl = null;
@@ -520,6 +523,18 @@ function pickSupportedMimeType() {
 }
 
 function stopDisplayTracks() {
+	if (recordingAudioContext) {
+		recordingAudioContext.close();
+		recordingAudioContext = null;
+	}
+
+	recordingAudioDestination = null;
+
+	if (microphoneStream) {
+		microphoneStream.getTracks().forEach((track) => track.stop());
+		microphoneStream = null;
+	}
+
 	if (!displayStream) {
 		return;
 	}
@@ -561,6 +576,18 @@ async function startRecording() {
 			video: { frameRate: 30 },
 			audio: true
 		});
+		try {
+			microphoneStream = await navigator.mediaDevices.getUserMedia({
+				audio: {
+					echoCancellation: true,
+					noiseSuppression: true,
+					autoGainControl: true
+				}
+			});
+		} catch (microphoneError) {
+			microphoneStream = null;
+			setStatus(`Screen recording started without microphone audio: ${microphoneError.message}`);
+		}
 
 		if (recordingDownloadUrl) {
 			URL.revokeObjectURL(recordingDownloadUrl);
@@ -582,7 +609,26 @@ async function startRecording() {
 
 		const mimeType = pickSupportedMimeType();
 		recordedChunks = [];
-		mediaRecorder = new MediaRecorder(displayStream, { mimeType });
+		recordingAudioContext = new AudioContext();
+		await recordingAudioContext.resume();
+		recordingAudioDestination = recordingAudioContext.createMediaStreamDestination();
+
+		if (displayStream.getAudioTracks().length > 0) {
+			const displayAudioSource = recordingAudioContext.createMediaStreamSource(new MediaStream(displayStream.getAudioTracks()));
+			displayAudioSource.connect(recordingAudioDestination);
+		}
+
+		if (microphoneStream && microphoneStream.getAudioTracks().length > 0) {
+			const microphoneSource = recordingAudioContext.createMediaStreamSource(microphoneStream);
+			microphoneSource.connect(recordingAudioDestination);
+		}
+
+		const recordingStream = new MediaStream([
+			...displayStream.getVideoTracks(),
+			...recordingAudioDestination.stream.getAudioTracks()
+		]);
+
+		mediaRecorder = new MediaRecorder(recordingStream, { mimeType });
 
 		mediaRecorder.addEventListener("dataavailable", (event) => {
 			if (event.data && event.data.size > 0) {
